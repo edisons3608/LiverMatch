@@ -1,10 +1,31 @@
 import mayavi.mlab as mlab
+import pyvista as pv
+
 c_red = (224. / 255., 0 / 255., 125 / 255.)
 c_pink = (224. / 255., 75. / 255., 232. / 255.)
 c_blue = (0. / 255., 0. / 255., 255. / 255.)
 c_green = (0. / 255., 255. / 255., 0. / 255.)
 c_gray1 = (100. / 255., 100. / 255., 100. / 255.)
 c_gray2 = (175. / 255., 175. / 255., 175. / 255.)
+
+def vis_pc_marker(src_vs=None, src_marker=None, tgt_vs=None, tgt_marker=None):
+    plotter = pv.Plotter()
+    plotter.set_background('white')
+
+    if src_vs is not None:
+        plotter.add_points(src_vs, color=[0, 150, 255], point_size=3, render_points_as_spheres=True, opacity=0.4)
+
+    if tgt_vs is not None:
+        plotter.add_points(tgt_vs, color=[254, 92, 92], point_size=3, render_points_as_spheres=True, opacity=0.4)
+
+    if src_marker is not None:
+        plotter.add_points(src_marker, color=[0, 0, 255], point_size=12, render_points_as_spheres=True,
+                           opacity=0.9)  # ,render_points_as_spheres=True, point_size=5
+
+    if tgt_marker is not None:  # 255
+        plotter.add_points(tgt_marker, color=[255, 0, 0], point_size=12, render_points_as_spheres=True, opacity=0.9)
+
+    plotter.show()
 
 def compare_pcd(s_pc=None, tgt_pcd=None, scale_factor = 0.013):
     if s_pc is not None:
@@ -63,7 +84,59 @@ def viz_coarse_nn_correspondence_mayavi(s_pc, t_pc, correspondence, f_src_pcd=No
     mlab.points3d(s_cpts[:, 0], s_cpts[:, 1], s_cpts[:, 2], scale_factor=scale_factor , color=c_blue)
     mlab.points3d(t_cpts[:, 0], t_cpts[:, 1], t_cpts[:, 2], scale_factor=scale_factor , color=c_red)
     mlab.quiver3d(s_cpts[:, 0], s_cpts[:, 1], s_cpts[:, 2], flow[:, 0], flow[:, 1], flow[:, 2],
-                  scale_factor=1, mode='2ddash', line_width=1.)
+                  scale_factor=1, mode='2ddash', line_width=1.5, color=c_green)
+
+    mlab.show()
+
+def viz_coarse_nn_correspondence_mayavi_mask(s_pc, t_pc, correspondence, mask, f_src_pcd=None, f_tgt_pcd=None, scale_factor = 1):
+    '''
+    @param s_pc:  [S,3]
+    @param t_pc:  [T,3]
+    @param correspondence: [2,K]
+    @param f_src_pcd: [S1,3]
+    @param f_tgt_pcd: [T1,3]
+    @param scale_factor:
+    @return:
+    '''
+
+    import mayavi.mlab as mlab
+
+
+    if f_src_pcd is not None:
+        mlab.points3d(f_src_pcd[:, 0], f_src_pcd[:, 1], f_src_pcd[:, 2], scale_factor=scale_factor * 0.25, color=c_gray1)
+    else:
+        mlab.points3d(s_pc[:, 0], s_pc[:, 1], s_pc[:, 2], scale_factor=scale_factor*0.75, color=c_gray1)
+
+    if f_tgt_pcd is not None:
+        mlab.points3d(f_tgt_pcd[:, 0], f_tgt_pcd[:, 1], f_tgt_pcd[:, 2], scale_factor=scale_factor * 0.25, color=c_gray2)
+    else :
+        mlab.points3d(t_pc[:, 0], t_pc[:, 1], t_pc[:, 2], scale_factor=scale_factor*0.75, color=c_gray2)
+
+    s_cpts = s_pc[correspondence[0]]
+    t_cpts = t_pc[correspondence[1]]
+    flow = t_cpts-s_cpts
+
+    mask = mask*1.0
+
+    s_cpts = s_cpts[mask>0, :]
+    t_cpts = t_cpts[mask>0, :]
+    flow = flow[mask>0, :]
+
+    mlab.points3d(s_cpts[:, 0], s_cpts[:, 1], s_cpts[:, 2], scale_factor=scale_factor , color=c_blue)
+    mlab.points3d(t_cpts[:, 0], t_cpts[:, 1], t_cpts[:, 2], scale_factor=scale_factor , color=c_red)
+    mlab.quiver3d(s_cpts[:, 0], s_cpts[:, 1], s_cpts[:, 2], flow[:, 0], flow[:, 1], flow[:, 2],
+                  scale_factor=1, mode='2ddash', line_width=0.5, color=c_green)
+
+    s_cpts = s_pc[correspondence[0]]
+    t_cpts = t_pc[correspondence[1]]
+    flow = t_cpts - s_cpts
+
+    s_cpts= s_cpts[mask==0,:]
+    t_cpts = t_cpts[mask==0, :]
+    flow = flow[mask==0, :]
+
+    mlab.quiver3d(s_cpts[:, 0], s_cpts[:, 1], s_cpts[:, 2], flow[:, 0], flow[:, 1], flow[:, 2],
+                  scale_factor=1, mode='2ddash', line_width=0.5, color=(255.0/255., 162.0/255., 25./255.))
 
     mlab.show()
 
