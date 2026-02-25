@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from sklearn.metrics import precision_recall_fscore_support
-from models.spatial_consistency import Local_rigid, Outlier_rigid
+
 
 def pairwise_distance(
     x: torch.Tensor, y: torch.Tensor, normalized: bool = False, channel_first: bool = False
