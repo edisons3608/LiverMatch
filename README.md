@@ -16,7 +16,6 @@ In our following work, we released a larger dataset in [P2P](https://github.com/
 conda create -n match python==3.8
 conda activate match
 conda install pytorch torchvision torchaudio pytorch-cuda=11.7 -c pytorch -c nvidia # set the proper cuda version to your machine
-conda install pytorch
 pip install PyYAML
 conda install scipy
 pip install easydict
