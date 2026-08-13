@@ -90,18 +90,22 @@ if __name__ == '__main__':
                                                               num_workers=config.num_workers,
                                                               )
 
-    config.val_loader, _ = get_dataloader(dataset=val_set,
-                                          batch_size=config.batch_size,
-                                          shuffle=False,
-                                          num_workers=1,
-                                          neighborhood_limits=neighborhood_limits
-                                          )
+    config.val_loader = None
+    if val_set is not None:
+        config.val_loader, _ = get_dataloader(dataset=val_set,
+                                              batch_size=config.batch_size,
+                                              shuffle=False,
+                                              num_workers=1,
+                                              neighborhood_limits=neighborhood_limits
+                                              )
 
-    config.test_loader, _ = get_dataloader(dataset=benchmark_set,
-                                           batch_size=config.batch_size,
-                                           shuffle=False,
-                                           num_workers=1,
-                                           neighborhood_limits=neighborhood_limits)
+    config.test_loader = None
+    if benchmark_set is not None:
+        config.test_loader, _ = get_dataloader(dataset=benchmark_set,
+                                               batch_size=config.batch_size,
+                                               shuffle=False,
+                                               num_workers=1,
+                                               neighborhood_limits=neighborhood_limits)
 
     # create evaluation metrics
     config.desc_loss = LiverLoss(config)

@@ -1,0 +1,73 @@
+misc:
+  exp_dir: talus_finetune_selfpair
+  mode: train
+  gpu_mode: True
+  verbose: True
+  verbose_freq: 50
+  snapshot_freq: 1
+  pretrain: 'snapshot/liver_3D_1_one_transformer/checkpoints/model_best_loss.pth'
+
+
+model:
+  model_name: liver
+  num_layers: 4
+  in_points_dim: 3
+  first_feats_dim: 128
+  final_feats_dim: 32
+  first_subsampling_dl: 0.025
+  conv_radius: 2.5
+  deform_radius: 5.0
+  in_feats_dim: 1
+  num_kernel_points: 15
+  KP_extent: 2.0
+  KP_influence: linear
+  aggregation_mode: sum
+  fixed_kernel_points: center
+  use_batch_norm: True
+  batch_norm_momentum: 0.02
+  modulated: False
+
+transformer:
+  feature_dim: 384
+  n_head: 1
+  layer_types: ['self', 'cross']
+
+matching:
+  feature_dim_m: 34
+  confidence_threshold: 0.0
+  dsmax_temperature: 0.1
+
+loss:
+  focal_alpha: 0.25
+  focal_gamma: 2.0
+  pos_weight: 1.0
+  neg_weight: 1.0
+  confidence_threshold_metric: 0.0
+  vis_weight: 1.0
+  match_weight: 1.0
+  matrix_weight: 1.0
+
+optimiser:
+  optimizer: SGD
+  max_epoch: 10
+  lr: 0.0005
+  weight_decay: 0.000001
+  momentum: 0.98
+  scheduler: ExpLR
+  scheduler_gamma: 0.95
+  scheduler_freq: 1
+  iter_size: 1
+
+dataset:
+  dataset: talus
+  benchmark: Talus
+  batch_size: 1
+  num_workers: 0
+  root_path: "C:/Users/esun3/Documents/talus2/left/cache_pcd/"
+  train_list: "C:/Users/esun3/Documents/talus2/left/cache_pcd/train_list.txt"
+  val_list: "C:/Users/esun3/Documents/talus2/left/cache_pcd/val_list.txt"
+  max_noise: 0.02
+  overlap_radius: 0.08
+  max_vis: 0.85
+  min_vis: 0.45
+  max_points: 90000
