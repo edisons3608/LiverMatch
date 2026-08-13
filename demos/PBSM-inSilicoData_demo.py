@@ -1,4 +1,6 @@
 import os.path
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import open3d as o3d
 import numpy as np
@@ -10,7 +12,13 @@ from easydict import EasyDict as edict
 from configs.models import architectures
 from models.framework import KPFCNN
 from datasets.dataloader import collate_fn_descriptor, calibrate_neighbors
-from lib.visualization import viz_coarse_nn_correspondence_mayavi, compare_pcd
+try:
+    # mayavi/pyvista are only needed for the optional 3D debug viewers below;
+    # they aren't installed by default, so degrade gracefully when missing.
+    from lib.visualization import viz_coarse_nn_correspondence_mayavi, compare_pcd
+except ImportError:
+    viz_coarse_nn_correspondence_mayavi = None
+    compare_pcd = None
 from scipy.spatial.transform import Rotation
 
 import warnings
@@ -160,21 +168,23 @@ class LiverDemo(Dataset):
 
 if __name__ == '__main__':
 
+    # Repo-relative paths so this demo runs regardless of the machine/cwd it's launched from.
+    REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
     use_score = True
-    debug = True
+    debug = False  # requires mayavi/PyQt5 (not installed) to pop up 3D viewers; set True if you install them
     save = False
-    eva = False
+    eva = True
     reg = True
     scale_factor = 0.013
 
-    src_file = "/home/yzx/yzx/Deformable_Registration/LiverMatch/test_data/Liver1/rot_demo/src.ply"
-    tgt_file = "/home/yzx/yzx/Deformable_Registration/LiverMatch/test_data/Liver1/rot_demo/tgt_tf_1.0.ply"
-    gt_file = "/home/yzx/yzx/Deformable_Registration/LiverMatch/test_data/Liver1/rot_demo/gt_tf_1.0.ply"
-    file_name_cor = "/home/yzx/yzx/Deformable_Registration/LiverMatch/test_data/Liver1/rot_demo/pred_corr.txt" #if you want to save the matches
+    src_file = os.path.join(REPO_ROOT, "test_data", "Liver1", "src.ply")
+    tgt_file = os.path.join(REPO_ROOT, "test_data", "Liver1", "tgt.ply")
+    gt_file = os.path.join(REPO_ROOT, "test_data", "Liver1", "gt.ply")
+    file_name_cor = os.path.join(REPO_ROOT, "test_data", "Liver1", "pred_corr.txt")  # if you want to save the matches
 
-    
-    config_path = "/home/yzx/yzx/Deformable_Registration/LiverMatch/configs/liver.yaml"
-    pretrain_path = "/home/yzx/yzx/Deformable_Registration/LiverMatch/snapshot/liver_3D_1_one_transformer/checkpoints/model_best_loss.pth"
+    config_path = os.path.join(REPO_ROOT, "configs", "liver.yaml")
+    pretrain_path = os.path.join(REPO_ROOT, "snapshot", "liver_3D_1_one_transformer", "checkpoints", "model_best_loss.pth")
 
     src_pcd = ply2np(src_file)
     tgt_pcd = ply2np(tgt_file)
@@ -254,7 +264,7 @@ if __name__ == '__main__':
         np.savetxt(file_name_cor, match_pred_scores, fmt='%i')
 
     if reg:
-        RE = eva_regist(src_pcd, tgt_pcd, match_pred_scores, gt_pcd, distance_threshold=0.01, ransac_n=4, debug=True)
+        RE = eva_regist(src_pcd, tgt_pcd, match_pred_scores, gt_pcd, distance_threshold=0.01, ransac_n=4, debug=debug)
         print("RE:", RE)
 
 

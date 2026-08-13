@@ -3,6 +3,13 @@
 #include "grid_subsampling/grid_subsampling.h"
 #include <string>
 
+// NumPy >= 1.20 turned these into inline functions taking a strict
+// `const PyArrayObject *`, which MSVC (unlike old GCC) refuses to accept
+// implicit PyObject* -> PyArrayObject* conversions for. Re-cast at the call site.
+#define PyArray_NDIM(arr) PyArray_NDIM((PyArrayObject*)(arr))
+#define PyArray_DIM(arr, i) PyArray_DIM((PyArrayObject*)(arr), i)
+#define PyArray_DATA(arr) PyArray_DATA((PyArrayObject*)(arr))
+
 
 
 // docstrings for our module

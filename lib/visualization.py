@@ -1,6 +1,3 @@
-import mayavi.mlab as mlab
-import pyvista as pv
-
 c_red = (224. / 255., 0 / 255., 125 / 255.)
 c_pink = (224. / 255., 75. / 255., 232. / 255.)
 c_blue = (0. / 255., 0. / 255., 255. / 255.)
@@ -9,6 +6,7 @@ c_gray1 = (100. / 255., 100. / 255., 100. / 255.)
 c_gray2 = (175. / 255., 175. / 255., 175. / 255.)
 
 def vis_pc_marker(src_vs=None, src_marker=None, tgt_vs=None, tgt_marker=None):
+    import pyvista as pv
     plotter = pv.Plotter()
     plotter.set_background('white')
 
@@ -28,6 +26,7 @@ def vis_pc_marker(src_vs=None, src_marker=None, tgt_vs=None, tgt_marker=None):
     plotter.show()
 
 def compare_pcd(s_pc=None, tgt_pcd=None, scale_factor = 0.013):
+    import mayavi.mlab as mlab
     if s_pc is not None:
         mlab.points3d(s_pc[:, 0], s_pc[:, 1], s_pc[:, 2], scale_factor=scale_factor, color=c_blue)
     if tgt_pcd is not None:

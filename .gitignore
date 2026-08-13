@@ -1,1 +1,5 @@
 snapshot
+*.pyc
+/.venv/etc/jupyter
+/.venv
+/cpp_wrappers

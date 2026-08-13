@@ -11,7 +11,6 @@ from datasets.liver_task3 import liverTask3
 from datasets.liver_phantom import liverPhantom
 from lib.util import blend_scene_flow, multual_nn_correspondence
 from lib.timer import Timer
-from lib.visualization import viz_coarse_nn_correspondence_mayavi
 from lib.util import load_obj
 
 

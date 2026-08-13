@@ -25,6 +25,7 @@ pip install -U scikit-learn
 pip install mayavi
 pip install PyQt5
 pip install open3d
+pip install plotly # for interactive demo visualizations
 cd cpp_wrappers; sh compile_wrappers.sh; cd ..
 ```
 ### Run
