@@ -1,5 +1,5 @@
 misc:
-  exp_dir: talus_finetune_selfpair
+  exp_dir: talus_finetune_selfpair_30ep
   mode: train
   gpu_mode: True
   verbose: True
@@ -49,7 +49,7 @@ loss:
 
 optimiser:
   optimizer: SGD
-  max_epoch: 10
+  max_epoch: 31  # trainer loops range(1, max_epoch) -> this yields 30 actual training epochs
   lr: 0.0005
   weight_decay: 0.000001
   momentum: 0.98

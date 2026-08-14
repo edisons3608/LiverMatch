@@ -4,3 +4,6 @@ snapshot
 /.venv
 /cpp_wrappers
 demos/talus_demo_result.html
+*.log
+*.txt
+*.html
