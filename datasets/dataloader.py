@@ -10,6 +10,7 @@ from datasets.liver import livermatch
 from datasets.liver_task3 import liverTask3
 from datasets.liver_phantom import liverPhantom
 from datasets.talus import talusDataset
+from datasets.paint_talus import paintTalusDataset
 from lib.util import blend_scene_flow, multual_nn_correspondence
 from lib.timer import Timer
 from lib.util import load_obj
@@ -665,6 +666,10 @@ def get_datasets(config):
     elif (config.dataset == 'talus'):
         train_set = talusDataset(config, 'train')
         val_set = talusDataset(config, 'val')
+        benchmark_set = None
+    elif (config.dataset == 'talus_paint'):
+        train_set = paintTalusDataset(config, 'train')
+        val_set = paintTalusDataset(config, 'val')
         benchmark_set = None
     else:
         raise NotImplementedError
