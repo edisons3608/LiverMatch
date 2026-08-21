@@ -35,12 +35,6 @@ warnings.filterwarnings("ignore")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TALUS_DIR = r"C:\Users\esun3\Documents\talus_small"
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--n-trials', type=int, default=5)
-parser.add_argument('--seed-base', type=int, default=100)
-parser.add_argument('--verbose', action='store_true', help='print every trial, not just the summary')
-args = parser.parse_args()
-
 config_path = os.path.join(REPO_ROOT, "configs", "liver.yaml")
 config = load_config(config_path)
 config = edict(config)
@@ -152,37 +146,48 @@ def run_trial(model, src_pcd, tgt_pcd, rot_gt, trans_gt):
                 trans_err=trans_err, n_raw=n_raw, n_high_conf=n_high_conf)
 
 
-scenarios = {
-    "cross-subject (talus_demo.py)": build_cross_subject_trials(args.n_trials, args.seed_base),
-    "same-bone partial view":        build_same_bone_trials(args.n_trials, args.seed_base + 1000),
-}
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--n-trials', type=int, default=5)
+    parser.add_argument('--seed-base', type=int, default=100)
+    parser.add_argument('--verbose', action='store_true', help='print every trial, not just the summary')
+    args = parser.parse_args()
 
-for scenario_name, (desc, trials) in scenarios.items():
-    print(f"\n########## {scenario_name} ##########")
-    print(desc)
-    print(f"{args.n_trials} trials, shared across checkpoints (paired comparison)")
+    scenarios = {
+        "cross-subject (talus_demo.py)": build_cross_subject_trials(args.n_trials, args.seed_base),
+        "same-bone partial view":        build_same_bone_trials(args.n_trials, args.seed_base + 1000),
+    }
 
-    for name, ckpt_path in checkpoints.items():
-        model = KPFCNN(config).to(config.device).eval()
-        state = torch.load(ckpt_path, map_location=config.device)
-        model.load_state_dict(state['state_dict'])
+    for scenario_name, (desc, trials) in scenarios.items():
+        print(f"\n########## {scenario_name} ##########")
+        print(desc)
+        print(f"{args.n_trials} trials, shared across checkpoints (paired comparison)")
 
-        rows = []
-        for t_i, (src_pcd, tgt_pcd, rot_gt, trans_gt) in enumerate(trials):
-            r = run_trial(model, src_pcd, tgt_pcd, rot_gt, trans_gt)
-            rows.append(r)
-            if args.verbose:
-                print(f"    [{name}] trial {t_i+1}/{args.n_trials}: "
-                      f"rot={r['rot_err']:.2f} trans={r['trans_err']:.4f} "
-                      f"corr={r['n_raw']}/{r['n_high_conf']} after_dist={r['after_dist']:.4f}")
+        for name, ckpt_path in checkpoints.items():
+            model = KPFCNN(config).to(config.device).eval()
+            state = torch.load(ckpt_path, map_location=config.device)
+            model.load_state_dict(state['state_dict'])
 
-        rot_errs = np.array([r['rot_err'] for r in rows])
-        trans_errs = np.array([r['trans_err'] for r in rows])
-        after_dists = np.array([r['after_dist'] for r in rows])
+            rows = []
+            for t_i, (src_pcd, tgt_pcd, rot_gt, trans_gt) in enumerate(trials):
+                r = run_trial(model, src_pcd, tgt_pcd, rot_gt, trans_gt)
+                rows.append(r)
+                if args.verbose:
+                    print(f"    [{name}] trial {t_i+1}/{args.n_trials}: "
+                          f"rot={r['rot_err']:.2f} trans={r['trans_err']:.4f} "
+                          f"corr={r['n_raw']}/{r['n_high_conf']} after_dist={r['after_dist']:.4f}")
 
-        print(f"  === {name} ===")
-        print(f"    rot_error_deg:  mean={rot_errs.mean():7.3f}  std={rot_errs.std():6.3f}  "
-              f"median={np.median(rot_errs):7.3f}")
-        print(f"    trans_error:    mean={trans_errs.mean():7.4f}  std={trans_errs.std():6.4f}  "
-              f"median={np.median(trans_errs):7.4f}")
-        print(f"    after_dist:     mean={after_dists.mean():7.4f}  std={after_dists.std():6.4f}")
+            rot_errs = np.array([r['rot_err'] for r in rows])
+            trans_errs = np.array([r['trans_err'] for r in rows])
+            after_dists = np.array([r['after_dist'] for r in rows])
+
+            print(f"  === {name} ===")
+            print(f"    rot_error_deg:  mean={rot_errs.mean():7.3f}  std={rot_errs.std():6.3f}  "
+                  f"median={np.median(rot_errs):7.3f}")
+            print(f"    trans_error:    mean={trans_errs.mean():7.4f}  std={trans_errs.std():6.4f}  "
+                  f"median={np.median(trans_errs):7.4f}")
+            print(f"    after_dist:     mean={after_dists.mean():7.4f}  std={after_dists.std():6.4f}")
+
+
+if __name__ == '__main__':
+    main()
