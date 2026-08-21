@@ -7,3 +7,4 @@ demos/talus_demo_result.html
 *.log
 *.txt
 *.html
+*.csv

@@ -65,17 +65,23 @@ def to_o3d_pcd(xyz):
     return pcd
 
 
-def eva_regist(src_pcd, tgt_pcd, corrs, distance_threshold=0.05, ransac_n=4):
+def eva_regist(src_pcd, tgt_pcd, corrs, distance_threshold=0.05, ransac_n=4, criteria=None):
     src_o3d = to_o3d_pcd(src_pcd)
     tgt_o3d = to_o3d_pcd(tgt_pcd)
     corrs = np.asarray(corrs).astype(np.int32)
     corrs_o3d = o3d.utility.Vector2iVector(corrs)
+
+    # Open3D defaults to max_iteration=100000 which can take a very long time on noisy
+    # correspondence sets; callers may pass a bounded RANSACConvergenceCriteria for speed.
+    if criteria is None:
+        criteria = o3d.pipelines.registration.RANSACConvergenceCriteria()
 
     result_ransac = o3d.pipelines.registration.registration_ransac_based_on_correspondence(
         source=src_o3d, target=tgt_o3d, corres=corrs_o3d,
         max_correspondence_distance=distance_threshold,
         estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
         ransac_n=ransac_n,
+        criteria=criteria,
     )
     return np.array(result_ransac.transformation)
 

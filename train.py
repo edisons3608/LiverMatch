@@ -49,8 +49,11 @@ if __name__ == '__main__':
     else:
         config.device = torch.device('cpu')
 
-    # # backup the files
-    os.system(f'cp -r models {config.snapshot_dir}')
+    # Backup model source into snapshot in a cross-platform way.
+    models_backup_dir = os.path.join(config.snapshot_dir, 'models')
+    if os.path.exists(models_backup_dir):
+        shutil.rmtree(models_backup_dir)
+    shutil.copytree('models', models_backup_dir)
     # os.system(f'cp -r datasets {config.snapshot_dir}')
     # os.system(f'cp -r lib {config.snapshot_dir}')
     # shutil.copy2('main.py', config.snapshot_dir)

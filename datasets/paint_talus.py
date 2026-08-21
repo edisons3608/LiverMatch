@@ -5,7 +5,6 @@ import random
 
 import numpy as np
 import torch
-import open3d as o3d
 from scipy.spatial.transform import Rotation
 from scipy.spatial import cKDTree
 from torch.utils.data import Dataset
@@ -52,13 +51,10 @@ class paintTalusDataset(Dataset):
 		self.max_line_len_scale = float(getattr(config, 'paint_max_line_len_scale', 0.62))
 		self.proj_knn = int(getattr(config, 'paint_proj_knn', 32))
 		self.proj_iters = int(getattr(config, 'paint_proj_iters', 2))
-		self.use_mesh_projection = bool(getattr(config, 'paint_use_mesh_projection', True))
-		self.mesh_root = getattr(config, 'paint_mesh_root', None)
-		self.mesh_ext = str(getattr(config, 'paint_mesh_ext', '.stl')).lower()
 		self.max_rot_deg = float(getattr(config, 'max_rot_deg', 60.0))
 		self.max_trans = float(getattr(config, 'max_trans', 0.3))
 
-		self._mesh_scene_cache = {}
+		self._knn_cache = {}
 
 	def __len__(self):
 		return len(self.file_list)
@@ -73,7 +69,10 @@ class paintTalusDataset(Dataset):
 			return name
 		return os.path.join(self.root_path, name)
 
-	def _build_knn(self, points):
+	def _build_knn(self, points, sample_path=None):
+		if sample_path is not None and sample_path in self._knn_cache:
+			return self._knn_cache[sample_path]
+
 		n_pts = points.shape[0]
 		k = max(3, min(self.walk_knn + 1, n_pts))
 		tree = cKDTree(points)
@@ -83,40 +82,11 @@ class paintTalusDataset(Dataset):
 		step_col = min(6, dists.shape[1] - 1)
 		local_step = float(np.median(dists[:, step_col])) if step_col >= 1 else 1e-3
 		local_step = max(local_step, 1e-4)
+
+		if sample_path is not None:
+			self._knn_cache[sample_path] = (tree, local_step)
+
 		return tree, local_step
-
-	def _resolve_mesh_path(self, sample_path):
-		stem = os.path.splitext(os.path.basename(sample_path))[0]
-
-		if self.mesh_root is not None:
-			mesh_path = os.path.join(self.mesh_root, stem + self.mesh_ext)
-			if os.path.isfile(mesh_path):
-				return mesh_path
-
-		sample_dir = os.path.dirname(sample_path)
-		mesh_path = os.path.join(sample_dir, stem + self.mesh_ext)
-		if os.path.isfile(mesh_path):
-			return mesh_path
-
-		return None
-
-	def _get_mesh_scene(self, sample_path):
-		mesh_path = self._resolve_mesh_path(sample_path)
-		if mesh_path is None:
-			return None
-
-		if mesh_path in self._mesh_scene_cache:
-			return self._mesh_scene_cache[mesh_path]
-
-		mesh = o3d.io.read_triangle_mesh(mesh_path)
-		if mesh is None or len(mesh.triangles) == 0 or len(mesh.vertices) == 0:
-			return None
-
-		mesh_t = o3d.t.geometry.TriangleMesh.from_legacy(mesh)
-		scene = o3d.t.geometry.RaycastingScene()
-		scene.add_triangles(mesh_t)
-		self._mesh_scene_cache[mesh_path] = scene
-		return scene
 
 	def _interpolate_polyline(self, polyline, local_step):
 		if polyline.shape[0] < 2:
@@ -159,17 +129,6 @@ class paintTalusDataset(Dataset):
 
 		return projected
 
-	def _project_points_to_mesh_or_surface(self, query_pts, sample_path, surface_pts, tree):
-		if self.use_mesh_projection:
-			scene = self._get_mesh_scene(sample_path)
-			if scene is not None:
-				tensor_pts = o3d.core.Tensor(query_pts.astype(np.float32), dtype=o3d.core.Dtype.Float32)
-				closest = scene.compute_closest_points(tensor_pts)
-				mesh_proj = closest['points'].numpy().astype(np.float32)
-				return mesh_proj
-
-		return self._project_points_to_surface(query_pts, surface_pts, tree)
-
 	@staticmethod
 	def _smooth_polyline(polyline, n_pass=2):
 		if polyline.shape[0] < 3:
@@ -197,7 +156,7 @@ class paintTalusDataset(Dataset):
 			n_line = random.randint(self.min_stroke_points, self.max_stroke_points)
 			t = np.linspace(-0.5 * line_len, 0.5 * line_len, n_line, dtype=np.float32)
 			line_pts = anchor[None, :] + t[:, None] * dir_vec[None, :]
-			proj_pts = self._project_points_to_mesh_or_surface(line_pts, sample_path, points, tree)
+			proj_pts = self._project_points_to_surface(line_pts, points, tree)
 			proj_pts = self._smooth_polyline(proj_pts, n_pass=2)
 
 			proj_idx = tree.query(proj_pts, k=1)[1].astype(np.int64)
@@ -227,7 +186,7 @@ class paintTalusDataset(Dataset):
 		if n_lines is None:
 			n_lines = random.randint(self.min_lines, self.max_lines)
 
-		tree, local_step = self._build_knn(points)
+		tree, local_step = self._build_knn(points, sample_path=sample_path)
 		selected = np.zeros(n_pts, dtype=bool)
 		blocked = np.zeros(n_pts, dtype=bool)
 		paint_pts = []
@@ -249,8 +208,8 @@ class paintTalusDataset(Dataset):
 			paint_pts.append(interp)
 
 			selected[proj_idx] = True
-			for idx in proj_idx.tolist():
-				near_idx = tree.query_ball_point(points[idx], r=gap_radius)
+			near_idx_lists = tree.query_ball_point(points[proj_idx], r=gap_radius)
+			for near_idx in near_idx_lists:
 				if len(near_idx) > 0:
 					blocked[np.asarray(near_idx, dtype=np.int64)] = True
 			accepted_strokes += 1
