@@ -34,6 +34,14 @@ class talusDataset(Dataset):
         self.max_vis = config.max_vis
         self.min_vis = config.min_vis
         self.config = config
+        # Downsamples only the target (after cropping), relative to a native-resolution
+        # source -- simulates a lower-density partial scan of the same bone, e.g. a sparser
+        # intra-op point cloud registered against a full-resolution pre-op model.
+        self.target_downsample_factor = float(getattr(config, 'target_downsample_factor', 1.0))
+        # 'random': uniform random subsample (can leave sparse holes). 'fps': farthest-point
+        # sampling, spacing the kept points as evenly as possible (poisson-disk-like) -- tries
+        # to avoid the density mismatch that broke training under 'random' at ~20-50% visibility.
+        self.target_downsample_method = str(getattr(config, 'target_downsample_method', 'random'))
 
     def __len__(self):
         return len(self.file_list)
@@ -78,6 +86,24 @@ class talusDataset(Dataset):
         centroid = np.mean(points[:, :3], axis=0)
         return points[:, :3] - centroid
 
+    @staticmethod
+    def _fps_indices(points, n_keep):
+        """Farthest-point sampling: greedily keeps the point farthest from the
+        already-selected set. Spaces the kept points evenly (poisson-disk-like),
+        unlike uniform random subsampling which can leave sparse holes."""
+        n = points.shape[0]
+        if n_keep >= n:
+            return np.arange(n)
+        selected = np.empty(n_keep, dtype=np.int64)
+        selected[0] = np.random.randint(n)
+        min_dist = np.sum((points - points[selected[0]]) ** 2, axis=1)
+        for i in range(1, n_keep):
+            next_idx = np.argmax(min_dist)
+            selected[i] = next_idx
+            new_dist = np.sum((points - points[next_idx]) ** 2, axis=1)
+            min_dist = np.minimum(min_dist, new_dist)
+        return np.sort(selected)
+
     def get_input_train(self, index, vis=False, p=None):
         src_vs = np.load(self.root_path + random.choice(self.file_list))
         tgt_vs_full = src_vs  # same bone: target is a partial/noised/rotated view of the identical cloud
@@ -89,12 +115,23 @@ class talusDataset(Dataset):
 
         tgt_pcd, mask, rand_xyz = self.crop(tgt_vs_full, p)
 
-        sigma = np.random.rand(1)[0] * self.max_noise
-        tgt_pcd = tgt_pcd + (np.random.rand(tgt_pcd.shape[0], 3) - 0.5) * sigma
-
         # exact correspondence: point i in the full source survives the crop at
         # position j in tgt_pcd iff mask[i] is True and j is its rank among kept points
         src_idx = np.nonzero(mask)[0]
+
+        if self.target_downsample_factor != 1.0:
+            n_keep = int(round(tgt_pcd.shape[0] / self.target_downsample_factor))
+            n_keep = max(20, min(n_keep, tgt_pcd.shape[0]))
+            if self.target_downsample_method == 'fps':
+                sel = self._fps_indices(tgt_pcd, n_keep)
+            else:
+                sel = np.sort(np.random.choice(tgt_pcd.shape[0], size=n_keep, replace=False))
+            tgt_pcd = tgt_pcd[sel]
+            src_idx = src_idx[sel]
+
+        sigma = np.random.rand(1)[0] * self.max_noise
+        tgt_pcd = tgt_pcd + (np.random.rand(tgt_pcd.shape[0], 3) - 0.5) * sigma
+
         tgt_idx = np.arange(len(src_idx))
         correspondences = torch.from_numpy(np.stack([src_idx, tgt_idx], axis=1)).long()
 

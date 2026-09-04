@@ -42,21 +42,50 @@ import webbrowser
 import warnings
 warnings.filterwarnings("ignore")
 
+from lib.talus_acs import invariant_scale
 
-def stl_to_pcd(path, n_points=8000, target_diag=3.49, seed=0):
-    """Surface-sample an STL mesh into a point cloud, centered and rescaled so its
-    bounding-box diagonal matches the liver dataset's typical scaled extent (~3.49,
-    see test_data/Liver1/*.ply after the demo's /100 normalization)."""
+# Median RMS radius produced by the legacy bounding-box-diagonal convention
+# (target_diag=3.49) over this talus dataset; see lib/talus_acs.invariant_scale.
+TARGET_RMS = 0.9025
+
+
+def stl_to_pcd(path, n_points=8000, seed=0, norm="rms", target_scale=TARGET_RMS,
+               target_diag=3.49, return_scale=False):
+    """Surface-sample an STL mesh into a centered, rescaled point cloud.
+
+    norm="rms" (default): scale so the RMS radius about the centroid equals
+    `target_scale`. The RMS radius is rotation-invariant, so every subject is
+    normalised by a measure of its own size and nothing else.
+
+    norm="bbox" (legacy): scale so the bounding-box diagonal equals
+    `target_diag`. The bbox diagonal depends on how the bone happens to be posed
+    in the scanner -- it varies ~10% over orientations of a single fixed talus --
+    so it injects that much spurious scale variation across subjects, which lands
+    straight in the translation errors. Kept only to reproduce older results.
+    TARGET_RMS is the median RMS radius the legacy convention produced, so the
+    default keeps point spacing (and therefore every distance threshold tuned
+    against it) unchanged.
+
+    return_scale=True also returns mm_per_unit: multiply a distance in the
+    returned cloud by it to get millimetres.
+    """
     o3d.utility.random.seed(seed)
     mesh = o3d.io.read_triangle_mesh(path)
     mesh.compute_vertex_normals()
     pcd = mesh.sample_points_poisson_disk(number_of_points=n_points)
     pts = np.asarray(pcd.points)
 
-    diag = np.linalg.norm(pts.max(0) - pts.min(0))
-    pts = pts * (target_diag / diag)
+    if norm == "rms":
+        scale = target_scale / invariant_scale(pts)
+    elif norm == "bbox":
+        scale = target_diag / np.linalg.norm(pts.max(0) - pts.min(0))
+    else:
+        raise ValueError("norm must be 'rms' or 'bbox', got %r" % (norm,))
+
+    pts = pts * scale
     pts = pts - pts.mean(0)
-    return pts.astype(np.float32)
+    pts = pts.astype(np.float32)
+    return (pts, 1.0 / scale) if return_scale else pts
 
 
 def to_o3d_pcd(xyz):

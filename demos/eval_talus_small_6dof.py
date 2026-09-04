@@ -22,6 +22,8 @@ from models.framework import KPFCNN
 from datasets.dataloader import collate_fn_descriptor
 
 from talus_demo import stl_to_pcd, eva_regist, chamfer_like, PairDemo
+from talus_frames import frame_for_stl
+from lib.talus_acs import error_6dof, axis_labels
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -64,28 +66,42 @@ os.makedirs(viz_dir, exist_ok=True)
 
 def build_same_bone_scenario(src_stl, seed):
     np.random.seed(seed)
-    full_pcd = stl_to_pcd(src_stl, n_points=8000, seed=0)
+    full_pcd, mm_per_unit = stl_to_pcd(src_stl, n_points=8000, seed=0, return_scale=True)
     src_pcd = full_pcd
+    # frame from the FULL bone: registering a 60% crop to the template can land
+    # in a wholly wrong pose (measured drifts of 99 and 178 deg)
+    frame = frame_for_stl(src_stl, full_pcd, n_points=8000, mm_per_unit=mm_per_unit)
     tgt_partial = crop(full_pcd, p_keep=0.6)
     tgt_partial = tgt_partial + (np.random.rand(*tgt_partial.shape) - 0.5) * 0.02
     euler_gt = np.random.uniform(-np.pi / 3, np.pi / 3, size=3)
     rot_gt = Rotation.from_euler('zyx', euler_gt).as_matrix().astype(np.float32)
     trans_gt = (np.random.rand(3, 1) * 0.6 - 0.3).astype(np.float32)
     tgt_pcd = (np.matmul(rot_gt, tgt_partial.T) + trans_gt).T
-    return src_pcd, tgt_pcd, rot_gt, trans_gt
+    return src_pcd, tgt_pcd, rot_gt, trans_gt, frame
 
 
-def rot_trans_error_6dof(tsfm_pred, rot_gt, trans_gt):
-    """Per-axis rotation error (roll/pitch/yaw, deg) and translation error (x/y/z)."""
-    rot_pred = tsfm_pred[:3, :3]
-    trans_pred = tsfm_pred[:3, 3]
-    rot_err_mat = rot_pred @ rot_gt.T
-    roll, pitch, yaw = Rotation.from_matrix(rot_err_mat).as_euler('xyz', degrees=True)
-    tx, ty, tz = trans_pred - trans_gt.flatten()
-    return abs(roll), abs(pitch), abs(yaw), abs(tx), abs(ty), abs(tz)
+def rot_trans_error_6dof(tsfm_pred, rot_gt, trans_gt, frame=None):
+    """Per-axis 6DoF error in the bone's anatomical frame.
+
+    Every bone gets the same anatomical axes (propagated from one template),
+    so these numbers are comparable across subjects -- world-frame ones are
+    not, the raw scanner frames here differ by ~27 deg on average. Signed, and
+    in mm when the frame carries a mm_per_unit.
+    """
+    return error_6dof(tsfm_pred, rot_gt, trans_gt, frame=frame, signed=True)
 
 
-def save_visualization(fname, src_pcd, tgt_pcd, src_aligned, before_dist, after_dist, roll, pitch, yaw, tx, ty, tz):
+def _err_caption(roll, pitch, yaw, tx, ty, tz, frame):
+    """6DoF error line for a plot title, labelled with the frame's own axes."""
+    labels = axis_labels(frame)
+    unit = 'mm' if frame is not None and frame.mm_per_unit is not None else 'units'
+    rot = ' '.join(f'{l}={v:+.1f}' for l, v in zip(labels[:3], (roll, pitch, yaw)))
+    trans = ' '.join(f'{l}={v:+.3f}' for l, v in zip(labels[3:], (tx, ty, tz)))
+    return f'{rot} deg | {trans} {unit}'
+
+
+def save_visualization(fname, src_pcd, tgt_pcd, src_aligned, before_dist, after_dist,
+                        roll, pitch, yaw, tx, ty, tz, frame=None):
     def point_trace(xyz, color, name, show_legend=True):
         return go.Scatter3d(
             x=xyz[:, 0], y=xyz[:, 1], z=xyz[:, 2],
@@ -102,8 +118,7 @@ def save_visualization(fname, src_pcd, tgt_pcd, src_aligned, before_dist, after_
         subplot_titles=(
             f"Before registration<br>mean NN dist={before_dist:.3f}",
             f"After registration<br>mean NN dist={after_dist:.3f}<br>"
-            f"roll={roll:.1f} pitch={pitch:.1f} yaw={yaw:.1f} deg | "
-            f"tx={tx:.3f} ty={ty:.3f} tz={tz:.3f}",
+            + _err_caption(roll, pitch, yaw, tx, ty, tz, frame),
         ),
     )
     fig.add_trace(point_trace(src_pcd, 'red', 'source (full)'), row=1, col=1)
@@ -132,12 +147,14 @@ state = torch.load(checkpoint_path, map_location=config.device)
 model.load_state_dict(state['state_dict'])
 
 rows = []
+LAST_FRAME = None
 for i, fname in enumerate(stl_files):
     src_stl = os.path.join(TALUS_DIR, fname)
     t0 = time.time()
     print(f"[{i+1}/{len(stl_files)}] {fname}: sampling mesh...", flush=True)
     try:
-        src_pcd, tgt_pcd, rot_gt, trans_gt = build_same_bone_scenario(src_stl, seed=i)
+        src_pcd, tgt_pcd, rot_gt, trans_gt, frame = build_same_bone_scenario(src_stl, seed=i)
+        LAST_FRAME = frame
         print(f"    mesh sampled in {time.time()-t0:.1f}s, building inputs...", flush=True)
 
         t1 = time.time()
@@ -165,7 +182,7 @@ for i, fname in enumerate(stl_files):
 
         t3 = time.time()
         tsfm_pred = eva_regist(src_pcd, tgt_pcd, match_pred_scores, distance_threshold=0.15, ransac_n=4)
-        roll, pitch, yaw, tx, ty, tz = rot_trans_error_6dof(tsfm_pred, rot_gt, trans_gt)
+        roll, pitch, yaw, tx, ty, tz = rot_trans_error_6dof(tsfm_pred, rot_gt, trans_gt, frame)
         print(f"    RANSAC done in {time.time()-t3:.1f}s, computing chamfer + viz...", flush=True)
 
         t4 = time.time()
@@ -173,25 +190,32 @@ for i, fname in enumerate(stl_files):
         src_aligned = (np.matmul(tsfm_pred[:3, :3], src_pcd.T) + tsfm_pred[:3, 3:]).T
         after_dist = chamfer_like(src_aligned, tgt_pcd)
         out_html = save_visualization(fname, src_pcd, tgt_pcd, src_aligned, before_dist, after_dist,
-                                       roll, pitch, yaw, tx, ty, tz)
+                                       roll, pitch, yaw, tx, ty, tz, frame)
         print(f"    chamfer + viz done in {time.time()-t4:.1f}s", flush=True)
 
         rows.append((fname, roll, pitch, yaw, tx, ty, tz))
-        print(f"{fname:45s} roll={roll:7.3f} pitch={pitch:7.3f} yaw={yaw:7.3f}  "
-              f"tx={tx:7.4f} ty={ty:7.4f} tz={tz:7.4f}  total={time.time()-t0:.1f}s  viz={out_html}", flush=True)
+        print(f"{fname:45s} " + _err_caption(roll, pitch, yaw, tx, ty, tz, frame)
+              + f"  total={time.time()-t0:.1f}s  viz={out_html}", flush=True)
     except Exception as e:
         print(f"{fname:45s} FAILED: {e}", flush=True)
 
+TOTAL_N, ITEM_NAME = len(stl_files), 'bone'
 if rows:
     arr = np.array([r[1:] for r in rows])
-    labels = ["roll_deg", "pitch_deg", "yaw_deg", "tx", "ty", "tz"]
-    print(f"\n{len(rows)}/{len(stl_files)} bones succeeded")
-    print("mean:  " + "  ".join(f"{l}={v:.4f}" for l, v in zip(labels, arr.mean(0))))
-    print("std:   " + "  ".join(f"{l}={v:.4f}" for l, v in zip(labels, arr.std(0))))
-    print("median:" + "  ".join(f"{l}={v:.4f}" for l, v in zip(labels, np.median(arr, 0))))
+    labels = axis_labels(LAST_FRAME)
+    unit = 'mm' if LAST_FRAME is not None and LAST_FRAME.mm_per_unit is not None else 'units'
+    units = ['deg'] * 3 + [unit] * 3
+    print(f"\n{len(rows)}/{TOTAL_N} {ITEM_NAME}s succeeded"
+          f"  (errors in the {LAST_FRAME.source if LAST_FRAME else 'world'} frame)")
+    # signed mean +/- std keeps a systematic bias distinguishable from scatter;
+    # MAE is the magnitude summary that abs()-then-mean used to give
+    for j, (l, u) in enumerate(zip(labels, units)):
+        v = arr[:, j]
+        print(f"  {l + ' [' + u + ']':<20s} mean={v.mean():+9.4f}  std={v.std():8.4f}  "
+              f"MAE={np.abs(v).mean():8.4f}  median={np.median(v):+9.4f}")
 
     with open(out_csv, "w") as f:
-        f.write("bone,roll_deg,pitch_deg,yaw_deg,tx,ty,tz\n")
+        f.write("bone," + ",".join(l + "_" + u for l, u in zip(labels, units)) + "\n")
         for fname, roll, pitch, yaw, tx, ty, tz in rows:
             f.write(f"{fname},{roll},{pitch},{yaw},{tx},{ty},{tz}\n")
     print(f"\nSaved per-bone results to {out_csv}")

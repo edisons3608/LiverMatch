@@ -28,6 +28,8 @@ from models.framework import KPFCNN
 from datasets.dataloader import collate_fn_descriptor, get_dataloader
 
 from talus_demo import stl_to_pcd, eva_regist, rot_trans_error, chamfer_like, PairDemo
+from talus_frames import frame_for_stl
+from lib.talus_acs import error_6dof, axis_labels
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -47,6 +49,8 @@ checkpoints = {
     "talus fine-tuned (9ep self-pair)":  os.path.join(REPO_ROOT, "snapshot", "talus_finetune_selfpair",
                                                   "checkpoints", "model_best_loss.pth"),
     "talus fine-tuned (30ep self-pair)": os.path.join(REPO_ROOT, "snapshot", "talus_finetune_selfpair_30ep",
+                                                  "checkpoints", "model_best_loss.pth"),
+    "talus fine-tuned (30ep self-pair, ds3)": os.path.join(REPO_ROOT, "snapshot", "talus_finetune_selfpair_ds3",
                                                   "checkpoints", "model_best_loss.pth"),
 }
 
@@ -79,26 +83,50 @@ def random_rigid(rng):
     return rot_gt, trans_gt
 
 
-def build_cross_subject_trials(n_trials, seed_base):
+def rot_trans_error_6dof(tsfm_pred, rot_gt, trans_gt, frame=None):
+    """Per-axis 6DoF error, expressed in the bone's anatomical frame when given.
+
+    Without a frame these are world-axis Euler angles and a world-origin
+    translation difference, which are NOT comparable between subjects: the raw
+    scanner frames in this dataset differ by ~27 deg on average (max 43), so each
+    subject's tx points somewhere else anatomically. Pass the source bone's
+    AnatomicalFrame and the axes mean the same thing for every subject.
+
+    Values are signed -- a consistent bias and symmetric scatter are different
+    failures, and abs() collapses them into the same number. Translations come
+    back in mm when the frame carries a mm_per_unit.
+    """
+    return error_6dof(tsfm_pred, rot_gt, trans_gt, frame=frame, signed=True)
+
+
+def build_cross_subject_trials(n_trials, seed_base, n_points=8000):
     src_stl = os.path.join(TALUS_DIR, "200001-xx-f-055xxxxxx-tal-l-c-d-s%.stl")
     tgt_stl = os.path.join(TALUS_DIR, "200002-xx-m-068xxxxxx-tal-l-c-d-s%.stl")
-    src_pcd = stl_to_pcd(src_stl, n_points=8000, seed=0)
-    tgt_pcd_raw = stl_to_pcd(tgt_stl, n_points=8000, seed=1)
-    desc = f"Cross-subject: {os.path.basename(src_stl)} -> {os.path.basename(tgt_stl)}"
+    src_pcd, mm_per_unit = stl_to_pcd(src_stl, n_points=n_points, seed=0, return_scale=True)
+    tgt_pcd_raw = stl_to_pcd(tgt_stl, n_points=n_points, seed=1)
+    frame = frame_for_stl(src_stl, src_pcd, n_points=n_points, mm_per_unit=mm_per_unit)
+    desc = (f"Cross-subject: {os.path.basename(src_stl)} -> {os.path.basename(tgt_stl)} "
+            f"({n_points} pts/side); errors in the {frame.source} frame "
+            f"(fitness={frame.fitness:.3f}, rmse={frame.rmse:.4f})")
 
     trials = []
     for i in range(n_trials):
         rng = np.random.default_rng(seed_base + i)
         rot_gt, trans_gt = random_rigid(rng)
         tgt_pcd = (np.matmul(rot_gt, tgt_pcd_raw.T) + trans_gt).T
-        trials.append((src_pcd, tgt_pcd, rot_gt, trans_gt))
+        trials.append((src_pcd, tgt_pcd, rot_gt, trans_gt, frame))
     return desc, trials
 
 
-def build_same_bone_trials(n_trials, seed_base):
+def build_same_bone_trials(n_trials, seed_base, n_points=8000):
     src_stl = os.path.join(TALUS_DIR, "200001-xx-f-055xxxxxx-tal-l-c-d-s%.stl")
-    full_pcd = stl_to_pcd(src_stl, n_points=8000, seed=0)
-    desc = f"Same-bone partial view: {os.path.basename(src_stl)} (60% visible, +noise)"
+    full_pcd, mm_per_unit = stl_to_pcd(src_stl, n_points=n_points, seed=0, return_scale=True)
+    # the frame is derived from the FULL bone: registering a 60% crop to the template
+    # can land in a wholly wrong pose (measured drifts of 99 and 178 deg)
+    frame = frame_for_stl(src_stl, full_pcd, n_points=n_points, mm_per_unit=mm_per_unit)
+    desc = (f"Same-bone partial view: {os.path.basename(src_stl)} (60% visible, +noise, "
+            f"{n_points} pts source); errors in the {frame.source} frame "
+            f"(fitness={frame.fitness:.3f}, rmse={frame.rmse:.4f})")
 
     trials = []
     for i in range(n_trials):
@@ -107,11 +135,11 @@ def build_same_bone_trials(n_trials, seed_base):
         tgt_partial = tgt_partial + (rng.random(tgt_partial.shape) - 0.5) * 0.02
         rot_gt, trans_gt = random_rigid(rng)
         tgt_pcd = (np.matmul(rot_gt, tgt_partial.T) + trans_gt).T
-        trials.append((full_pcd, tgt_pcd, rot_gt, trans_gt))
+        trials.append((full_pcd, tgt_pcd, rot_gt, trans_gt, frame))
     return desc, trials
 
 
-def run_trial(model, src_pcd, tgt_pcd, rot_gt, trans_gt):
+def run_trial(model, src_pcd, tgt_pcd, rot_gt, trans_gt, frame=None):
     before_dist = chamfer_like(src_pcd, tgt_pcd)
     demo_set = PairDemo(config, src_pcd, tgt_pcd)
     list_data = demo_set.__getitem__(0)
@@ -138,24 +166,31 @@ def run_trial(model, src_pcd, tgt_pcd, rot_gt, trans_gt):
     tsfm_pred = eva_regist(src_pcd, tgt_pcd, match_pred_scores.numpy(), distance_threshold=0.15,
                             ransac_n=4, criteria=RANSAC_CRITERIA)
     rot_err_deg, trans_err = rot_trans_error(tsfm_pred, rot_gt, trans_gt)
+    roll, pitch, yaw, tx, ty, tz = rot_trans_error_6dof(tsfm_pred, rot_gt, trans_gt, frame)
 
     src_aligned = (np.matmul(tsfm_pred[:3, :3], src_pcd.T) + tsfm_pred[:3, 3:]).T
     after_dist = chamfer_like(src_aligned, tgt_pcd)
 
     return dict(before_dist=before_dist, after_dist=after_dist, rot_err=rot_err_deg,
-                trans_err=trans_err, n_raw=n_raw, n_high_conf=n_high_conf)
+                trans_err=trans_err, n_raw=n_raw, n_high_conf=n_high_conf,
+                roll=roll, pitch=pitch, yaw=yaw, tx=tx, ty=ty, tz=tz)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--n-trials', type=int, default=5)
     parser.add_argument('--seed-base', type=int, default=100)
+    parser.add_argument('--n-points', type=int, default=8000,
+                         help='points sampled per side (source and target) for both scenarios; '
+                              'the same-bone target is a crop of the source so it inherits this density too')
     parser.add_argument('--verbose', action='store_true', help='print every trial, not just the summary')
     args = parser.parse_args()
 
     scenarios = {
-        "cross-subject (talus_demo.py)": build_cross_subject_trials(args.n_trials, args.seed_base),
-        "same-bone partial view":        build_same_bone_trials(args.n_trials, args.seed_base + 1000),
+        "cross-subject (talus_demo.py)": build_cross_subject_trials(args.n_trials, args.seed_base,
+                                                                      n_points=args.n_points),
+        "same-bone partial view":        build_same_bone_trials(args.n_trials, args.seed_base + 1000,
+                                                                  n_points=args.n_points),
     }
 
     for scenario_name, (desc, trials) in scenarios.items():
@@ -169,24 +204,37 @@ def main():
             model.load_state_dict(state['state_dict'])
 
             rows = []
-            for t_i, (src_pcd, tgt_pcd, rot_gt, trans_gt) in enumerate(trials):
-                r = run_trial(model, src_pcd, tgt_pcd, rot_gt, trans_gt)
+            labels = axis_labels(trials[0][4])
+            rot_lbl, trans_lbl = labels[:3], labels[3:]
+            unit = 'mm' if trials[0][4].mm_per_unit is not None else 'units'
+            for t_i, (src_pcd, tgt_pcd, rot_gt, trans_gt, frame) in enumerate(trials):
+                r = run_trial(model, src_pcd, tgt_pcd, rot_gt, trans_gt, frame)
                 rows.append(r)
                 if args.verbose:
                     print(f"    [{name}] trial {t_i+1}/{args.n_trials}: "
-                          f"rot={r['rot_err']:.2f} trans={r['trans_err']:.4f} "
+                          f"roll={r['roll']:6.2f} pitch={r['pitch']:6.2f} yaw={r['yaw']:6.2f}  "
+                          f"tx={r['tx']:.4f} ty={r['ty']:.4f} tz={r['tz']:.4f}  "
                           f"corr={r['n_raw']}/{r['n_high_conf']} after_dist={r['after_dist']:.4f}")
 
+            axes = ['roll', 'pitch', 'yaw', 'tx', 'ty', 'tz']
+            stats = {a: np.array([r[a] for r in rows]) for a in axes}
+            after_dists = np.array([r['after_dist'] for r in rows])
             rot_errs = np.array([r['rot_err'] for r in rows])
             trans_errs = np.array([r['trans_err'] for r in rows])
-            after_dists = np.array([r['after_dist'] for r in rows])
 
             print(f"  === {name} ===")
-            print(f"    rot_error_deg:  mean={rot_errs.mean():7.3f}  std={rot_errs.std():6.3f}  "
-                  f"median={np.median(rot_errs):7.3f}")
-            print(f"    trans_error:    mean={trans_errs.mean():7.4f}  std={trans_errs.std():6.4f}  "
-                  f"median={np.median(trans_errs):7.4f}")
-            print(f"    after_dist:     mean={after_dists.mean():7.4f}  std={after_dists.std():6.4f}")
+            # signed mean +/- std separates bias from scatter; MAE alongside for magnitude
+            for axis, label in zip(['roll', 'pitch', 'yaw'], rot_lbl):
+                v = stats[axis]
+                print(f"    {label + ' [deg]':<20s} mean={v.mean():+8.3f}  std={v.std():6.3f}  "
+                      f"MAE={np.abs(v).mean():6.3f}")
+            for axis, label in zip(['tx', 'ty', 'tz'], trans_lbl):
+                v = stats[axis]
+                print(f"    {label + ' [' + unit + ']':<20s} mean={v.mean():+8.4f}  std={v.std():6.4f}  "
+                      f"MAE={np.abs(v).mean():6.4f}")
+            print(f"    (combined rot_error_deg mean={rot_errs.mean():7.3f}, "
+                  f"combined trans_error mean={trans_errs.mean():.4f}, "
+                  f"after_dist mean={after_dists.mean():.4f})")
 
 
 if __name__ == '__main__':

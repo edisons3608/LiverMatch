@@ -18,11 +18,12 @@ from configs.models import architectures
 from models.framework import KPFCNN
 from datasets.dataloader import collate_fn_descriptor
 
-from talus_demo import eva_regist, rot_trans_error, chamfer_like, PairDemo
+from talus_demo import eva_regist, chamfer_like, PairDemo
 from compare_talus_checkpoints import (
-    build_cross_subject_trials, build_same_bone_trials, RANSAC_CRITERIA, th_score,
+    build_cross_subject_trials, build_same_bone_trials, rot_trans_error_6dof, RANSAC_CRITERIA, th_score,
     neighborhood_limits as NEIGHBORHOOD_LIMITS,
 )
+from lib.talus_acs import axis_labels
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -32,6 +33,9 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 parser = argparse.ArgumentParser()
 parser.add_argument('--n-trials', type=int, default=5)
 parser.add_argument('--seed-base', type=int, default=100)
+parser.add_argument('--n-points', type=int, default=8000,
+                     help='points sampled per side (source and target); pass e.g. 2667 to match a '
+                          'checkpoint trained on a 3x-downsampled cache')
 parser.add_argument('--scenario', choices=['same-bone', 'cross-subject', 'both'], default='same-bone')
 parser.add_argument('--checkpoint', default=os.path.join(REPO_ROOT, 'snapshot', 'talus_finetune_selfpair_30ep',
                                                           'checkpoints', 'model_best_loss.pth'))
@@ -64,14 +68,24 @@ def point_trace(xyz, color, name, size=2, opacity=0.8, show_legend=True):
     )
 
 
-def save_visualization(fname, src_pcd, tgt_pcd, src_aligned, before_dist, after_dist, rot_err, trans_err):
+def _err_caption(roll, pitch, yaw, tx, ty, tz, frame):
+    """6DoF error line for a plot title, labelled with the frame's own axes."""
+    labels = axis_labels(frame)
+    unit = 'mm' if frame is not None and frame.mm_per_unit is not None else 'units'
+    rot = ' '.join(f'{l}={v:+.1f}' for l, v in zip(labels[:3], (roll, pitch, yaw)))
+    trans = ' '.join(f'{l}={v:+.3f}' for l, v in zip(labels[3:], (tx, ty, tz)))
+    return f'{rot} deg | {trans} {unit}'
+
+
+def save_visualization(fname, src_pcd, tgt_pcd, src_aligned, before_dist, after_dist,
+                        roll, pitch, yaw, tx, ty, tz, frame=None):
     fig = make_subplots(
         rows=1, cols=2,
         specs=[[{'type': 'scene'}, {'type': 'scene'}]],
         subplot_titles=(
             f"Before registration<br>mean NN dist={before_dist:.4f}",
             f"After registration<br>mean NN dist={after_dist:.4f}<br>"
-            f"rot_err={rot_err:.2f} deg | trans_err={trans_err:.4f}",
+            + _err_caption(roll, pitch, yaw, tx, ty, tz, frame),
         ),
     )
     fig.add_trace(point_trace(src_pcd, 'lightgray', 'source (full)', opacity=0.35), row=1, col=1)
@@ -97,7 +111,7 @@ def save_visualization(fname, src_pcd, tgt_pcd, src_aligned, before_dist, after_
 def run_and_visualize(scenario_key, desc, trials):
     print(f"\n########## {scenario_key} ##########\n{desc}")
     rows = []
-    for t_i, (src_pcd, tgt_pcd, rot_gt, trans_gt) in enumerate(trials):
+    for t_i, (src_pcd, tgt_pcd, rot_gt, trans_gt, frame) in enumerate(trials):
         before_dist = chamfer_like(src_pcd, tgt_pcd)
         demo_set = PairDemo(config, src_pcd, tgt_pcd)
         list_data = demo_set.__getitem__(0)
@@ -119,26 +133,27 @@ def run_and_visualize(scenario_key, desc, trials):
 
         tsfm_pred = eva_regist(src_pcd, tgt_pcd, match_pred_scores.numpy(), distance_threshold=0.15,
                                 ransac_n=4, criteria=RANSAC_CRITERIA)
-        rot_err, trans_err = rot_trans_error(tsfm_pred, rot_gt, trans_gt)
+        roll, pitch, yaw, tx, ty, tz = rot_trans_error_6dof(tsfm_pred, rot_gt, trans_gt, frame)
 
         src_aligned = (np.matmul(tsfm_pred[:3, :3], src_pcd.T) + tsfm_pred[:3, 3:]).T
         after_dist = chamfer_like(src_aligned, tgt_pcd)
 
         fname = f"{scenario_key}_trial{t_i+1}"
         out_html = save_visualization(fname, src_pcd, tgt_pcd, src_aligned, before_dist, after_dist,
-                                       rot_err, trans_err)
+                                       roll, pitch, yaw, tx, ty, tz, frame)
         rows.append(out_html)
-        print(f"  trial {t_i+1}/{len(trials)}: rot_err={rot_err:6.2f} deg  trans_err={trans_err:.4f}  "
-              f"before={before_dist:.4f} after={after_dist:.4f}  viz={out_html}")
+        print(f"  trial {t_i+1}/{len(trials)}: "
+              + _err_caption(roll, pitch, yaw, tx, ty, tz, frame)
+              + f"  before={before_dist:.4f} after={after_dist:.4f}  viz={out_html}")
     return rows
 
 
 all_viz = []
 if args.scenario in ('same-bone', 'both'):
-    desc, trials = build_same_bone_trials(args.n_trials, args.seed_base + 1000)
+    desc, trials = build_same_bone_trials(args.n_trials, args.seed_base + 1000, n_points=args.n_points)
     all_viz += run_and_visualize('same-bone', desc, trials)
 if args.scenario in ('cross-subject', 'both'):
-    desc, trials = build_cross_subject_trials(args.n_trials, args.seed_base)
+    desc, trials = build_cross_subject_trials(args.n_trials, args.seed_base, n_points=args.n_points)
     all_viz += run_and_visualize('cross-subject', desc, trials)
 
 print(f"\nSaved {len(all_viz)} visualization(s) to {args.out_dir}")

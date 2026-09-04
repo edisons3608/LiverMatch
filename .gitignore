@@ -8,3 +8,7 @@ demos/talus_demo_result.html
 *.txt
 *.html
 *.csv
+
+# generated anatomical-frame caches (regenerated on demand)
+demos/talus_acs_cache.json
+demos/talus_ssm_frames.json
